@@ -36,7 +36,12 @@ Real Law2_ScGeom6D_CohFrictPhys_CohesionMoment::shearElastEnergy()
 		if(!I->isReal()) continue;
 		CohFrictPhys* phys = YADE_CAST<CohFrictPhys*>(I->phys.get());
 		if (phys) {
-			shearEnergy += 0.5*(phys->shearForce.squaredNorm()/phys->ks);
+			if (!avoidGranularRatcheting) shearEnergy += 0.5*(phys->shearForce.squaredNorm()/phys->ks);
+			else {
+				ScGeom* geom  = YADE_CAST<ScGeom6D*> (I->geom.get());
+				shearEnergy += 0.5*(phys->shearForce.squaredNorm()/phys->ks)
+					* pow((geom->radius1+geom->radius2-geom->penetrationDepth)/(geom->radius1+geom->radius2),2);
+			}
 		}
 	}
 	return shearEnergy;
@@ -133,6 +138,17 @@ bool Law2_ScGeom6D_CohFrictPhys_CohesionMoment::go(shared_ptr<IGeom>& ig, shared
 		const Vector3r& dus = geom->shearIncrement();
 
 		//Linear elasticity giving "trial" shear force
+		#ifdef NORATCH2
+		if (avoidGranularRatcheting){
+// 			Real alpha = (geom->radius1+geom->radius2)/(geom->radius1+geom->radius2-un);
+			//Fs = -α*(R1.θ1 + R2.θ2) -> dFs = dα*(Fs/α) - α(R1.dθ1 + R2.dθ2)
+			//here (R1.θ1 + R2.θ2) is us, and (R1.dθ1 + R2.dθ2) is dus, as soon as Ig2::avoidRatcheting=1
+			Vector3r& us = geom->rotate(geom->us);
+			us += dus;
+			shearForce = -geom->alpha*phys->ks*us;
+// 			geom->penetrationInc=alpha;
+		} else
+		#endif
 		shearForce -= phys->ks*dus;
 
 		Real Fs = phys->shearForce.norm();
@@ -146,6 +162,9 @@ bool Law2_ScGeom6D_CohFrictPhys_CohesionMoment::go(shared_ptr<IGeom>& ig, shared
 				maxFs = max((Real) 0, Fn*phys->tangensOfFrictionAngle);
 			}
 			maxFs = maxFs / Fs;
+			#ifdef NORATCH2
+			geom->us *= maxFs;
+			#endif
 			Vector3r trialForce=shearForce;
 			shearForce *= maxFs;
 			if (scene->trackEnergy){

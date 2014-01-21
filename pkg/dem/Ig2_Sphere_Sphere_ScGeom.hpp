@@ -26,6 +26,11 @@ class Ig2_Sphere_Sphere_ScGeom: public IGeomFunctor{
 		"It results in a finite contact force at the end of the cycle even though the positions and orientations are unchanged, in total contradiction with the elastic nature of the problem. It could also be seen as an *inconsistent energy creation or loss*. Given that DEM simulations tend to generate oscillations around equilibrium (damped mass-spring), it can have a significant impact on the evolution of the packings, resulting for instance in slow creep in iterations under constant load.\n\n"
 		"The solution adopted here to avoid ratcheting is as proposed by McNamara and co-workers. They analyzed the ratcheting problem in detail - even though they comment on the basis of a cycle that differs from the one shown above. One will find interesting discussions in e.g. [McNamara2008]_, even though solution it suggests is not fully applied here (equations of motion are not incorporating alpha, in contradiction with what is suggested by McNamara et al.).\n\n"
 		))
+		((int,shearScheme,3,,"see :yref:`ScGeom::shearScheme`"))
+// 		((bool,objective,true,,"when avoidGranularRatcheting=True, objective=False will give the historical Cundall's expression with constant radius. It can be made objective using Bardet's formulation if objective=True. when avoidGranularRatcheting=False, this value is ignored."))
+// 		((bool, exactRot,false,,"quaternion based rotations for updating the previous shear force orientation"))
+// 		((bool, exactShear,false,,"compute shear disp. using exact rotations if true, else use approximations by projection on the normal"))
+// 		((bool, midStepNormal,false,,"compute shear disp. using projection on the normal evaluated at half timestep, else use the current normal"))
 	);
 	FUNCTOR2D(Sphere,Sphere);
 	// needed for the dispatcher, even if it is symmetric
