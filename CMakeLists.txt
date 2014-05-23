@@ -62,11 +62,15 @@ IF ("${CMAKE_CXX_COMPILER} ${CMAKE_CXX_COMPILER_ARG1}" MATCHES ".*clang")
 ENDIF()
 
 #===========================================================
+<<<<<<< HEAD
 
 SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++0x")
 
 #===========================================================
 
+=======
+ADD_DEFINITIONS(" -DYADE_PTR_CAST=boost::static_pointer_cast -DYADE_CAST=static_cast ")
+>>>>>>> Remove all remaining `using namespace boost`
 IF (CMAKE_CXX_FLAGS)
   #If flags are set, add only neccessary flags
   IF (DEBUG)
