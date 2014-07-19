@@ -12,50 +12,12 @@ ScGeom::~ScGeom(){};
 ScGeom6D::~ScGeom6D(){};
 ChCylGeom6D::~ChCylGeom6D(){};
 
-Vector3r ScGeom::orthVect (const Vector3r& v){
-	//this is the cross product of v with {v1 v2 v0}
-	return Vector3r(v[1]*v[0]-v[2]*v[2],
-			v[2]*v[1]-v[0]*v[0],
-			v[0]*v[2]-v[1]*v[1]
-	);}
-
-Vector3r ScGeom::rrotWithSin (const Vector3r& axisSinAngle, const Real& sinA, const Real& cosA, const Vector3r& v) const {
-	Vector3r u = axisSinAngle.cross(v);
-	return v+u+axisSinAngle.cross(u)*(1./(1+cosA));}
-
-Vector3r ScGeom::rrotWithSin (const Vector3r& axisSinAngle, const Real& sinA, const Vector3r& v) const {
-	return rrotWithSin(axisSinAngle,sinA,sqrt(1-sinA*sinA),v);}
-
-Vector3r ScGeom::rrotWithSin (const Vector3r& axisSinAngle, const Vector3r& v) const {
-	Real a = axisSinAngle.squaredNorm();
-	//the angle is so small that the error is negligible, use cross product
-	if (a<1e-15) return v + axisSinAngle.cross(v);
-	//else compute exact rotation
-	return rrotWithSin(axisSinAngle,sqrt(a),v);}
-
-Vector3r ScGeom::rrot (const Vector3r& axisAngle, const Real& angle, const Real& sinA, const Real& cosA, const Vector3r& v) const {
-	Vector3r u = axisAngle.cross(v);
-	return v+u*(sinA/angle)+axisAngle.cross(u)*((1-cosA)/(angle*angle));}
-
-Vector3r ScGeom::rrot (const Vector3r& axisAngle, const Vector3r& v) const {
-	Real a = axisAngle.squaredNorm();
-	//avoid division by zero + the angle is so small that the error is negligible
-	if (a<1e-15) return v + axisAngle.cross(v);
-	//else compute exact rotation
-	return rrot(axisAngle,sqrt(a),v);}
-
-Vector3r ScGeom::rrot (const Vector3r& axisAngle, const Real& angle, const Vector3r& v) const {
-	return rrot(axisAngle,angle,sin(angle),cos(angle),v);}
-
 Vector3r& ScGeom::rotate(Vector3r& shearForce) const {
-	if (!(shearScheme & EXACT_ROTATE)) {
-		// approximated rotations
-		shearForce -= shearForce.cross(orthonormal_axis);
-		shearForce -= shearForce.cross(twist_axis);
-		//NOTE : make sure it is in the tangent plane? It's never been done before. Is it not adding rounding errors at the same time in fact?...
-		//shearForce -= normal.dot(shearForce)*normal;
-	} else {//FIXME: precompute sinus for faster rotation here
-		shearForce = rrotWithSin(twist_axis,rrotWithSin(orthonormal_axis,shearForce));}
+	// approximated rotations
+	shearForce -= shearForce.cross(orthonormal_axis);
+	shearForce -= shearForce.cross(twist_axis);
+	//NOTE : make sure it is in the tangent plane? It's never been done before. Is it not adding rounding errors at the same time in fact?...
+	//shearForce -= normal.dot(shearForce)*normal;
 	return shearForce;
 }
 
@@ -63,111 +25,44 @@ Vector3r& ScGeom::rotate(Vector3r& shearForce) const {
 void ScGeom::precompute(const State& rbp1, const State& rbp2, const Scene* scene, const shared_ptr<Interaction>& c, const Vector3r& currentNormal, bool isNew, const Vector3r& shift2, bool avoidGranularRatcheting){
 	if(!isNew) {
 		orthonormal_axis = normal.cross(currentNormal);
-		Real twistRate = scene->dt*0.5*normal.dot(rbp1.angVel + rbp2.angVel);
-		//Approximate rotation. If EXACT_ROTATE is specified but rotations are very small, we use this approximate value as well (avoids errors due to division by ~0)
-		if (!(shearScheme & EXACT_ROTATE) || abs(twistRate)<1e-7 ) twist_axis = twistRate*normal;
-		else {
-			//get a tangent vector in the starting plane
-			Vector3r t = orthVect(normal);
-			t.normalize();
-			//rotate it with only the orthonormal rotations
-			Vector3r t20 = rrotWithSin(orthonormal_axis,t);
-			//now rotate it with spin1/spin2
-			Vector3r t21 = rrot(rbp1.angVel*scene->dt,t);
-			Vector3r t22 = rrot(rbp2.angVel*scene->dt,t);
-			//project on the final plane and get unit vectors FIXME: room for optimization here, we have 4 normalize...
-			t21 = t21 - t21.dot(currentNormal)*currentNormal;
-			t22 = t22 - t22.dot(currentNormal)*currentNormal;
-			t21.normalize(); t22.normalize();
-			//average rotation in the final plane
-			t21=0.5*(t21+t22); t21.normalize();
-			twist_axis = t20.cross(t21);
-		}
-		rotate(t1);
-	}
-	else {twist_axis=orthonormal_axis=Vector3r::Zero(); normal=currentNormal; midStepN=currentNormal;
-	#ifdef NORATCH2
-		t1 =  orthVect(normal); t1.normalize();
-	#endif
-	}
-	
-	if (shearScheme & MID_STEP_NORMAL) {midStepN=(normal+currentNormal); midStepN.normalize();}
-	else midStepN=normal;//can be used to reflect previous normal in exact scheme (shearScheme & 8)
+		Real angle = scene->dt*0.5*normal.dot(rbp1.angVel + rbp2.angVel);
+		twist_axis = angle*normal;}
+	else twist_axis=orthonormal_axis=Vector3r::Zero();
 	//Update contact normal
 	normal=currentNormal;
-	
 	//Precompute shear increment
-	if (shearScheme & EXACT_SHEAR) {
-		shearInc = getIncidentVel(&rbp1,&rbp2,scene->dt,shift2,scene->isPeriodic ? scene->cell->intrShiftVel(c->cellDist) : Vector3r::Zero(),avoidGranularRatcheting);
-		return;}
-	
 	Vector3r relativeVelocity=getIncidentVel(&rbp1,&rbp2,scene->dt,shift2,scene->isPeriodic ? scene->cell->intrShiftVel(c->cellDist) : Vector3r::Zero(),avoidGranularRatcheting);
-	//keep the shear part only FIXME: this projection is not needed in most cases
-/*	if (shearScheme & MID_STEP_NORMAL) relativeVelocity = relativeVelocity-normal.dot(relativeVelocity)*normal;
-	else*/
+	//keep the shear part only
 	relativeVelocity = relativeVelocity-normal.dot(relativeVelocity)*normal;
 	shearInc = relativeVelocity*scene->dt;
 }
 
 Vector3r ScGeom::getIncidentVel(const State* rbp1, const State* rbp2, Real dt, const Vector3r& shift2, const Vector3r& shiftVel, bool avoidGranularRatcheting){
-	// Not a very good scheme, only for experiments
-	if (!(shearScheme & OBJECTIVE)) {
-		Vector3r relativeVelocity = (rbp2->vel-rbp1->vel) + rbp2->angVel.cross(-radius2*normal) - rbp1->angVel.cross(radius1*normal);
-		relativeVelocity+=shiftVel;
-		return relativeVelocity;
-	}
-	// This classical one is correct for sphere-sphere and sphere-facet contact
-	// If the Ig2 passes avoid=false, it superseeds ScGeom::shearScheme settings (for e.g. sphere-facet)
-	if ( !( (shearScheme & NORATCHETING) && avoidGranularRatcheting)) {
-		Vector3r c1x = (contactPoint - rbp1->pos);
-		Vector3r c2x = (contactPoint - rbp2->pos - shift2);
-
-		if (shearScheme & MID_STEP_NORMAL) {
-			c1x = c1x.norm()*midStepN;
-			c2x = -c2x.norm()*midStepN;
-			Vector3r relativeVelocity = (rbp2->vel+rbp2->angVel.cross(c2x)) - (rbp1->vel+rbp1->angVel.cross(c1x));
-			relativeVelocity+=shiftVel;
-			relativeVelocity -= 0.5*relativeVelocity.cross(twist_axis);
-			relativeVelocity -= 0.5*relativeVelocity.cross(orthonormal_axis);
-			return relativeVelocity;}
-		else return (rbp2->vel+rbp2->angVel.cross(c2x)) - (rbp1->vel+rbp1->angVel.cross(c1x)) + shiftVel;
-	}
-
-	if (!(shearScheme & EXACT_SHEAR)) {
+	if(avoidGranularRatcheting){
+		/* B.C. Comment :
+		Short explanation of what we want to avoid :
+		Numerical ratcheting is best understood considering a small elastic cycle at a contact between two grains : assuming b1 is fixed, impose this displacement to b2 :
+		1. translation "dx" in the normal direction
+		2. rotation "a"
+		3. translation "-dx" (back to initial position)
+		4. rotation "-a" (back to initial orientation)
+		If the branch vector used to define the relative shear in rotation×branch is not constant (typically if it is defined from the vector center→contactPoint), then the shear displacement at the end of this cycle is not zero: rotations *a* and *-a* are multiplied by branches of different lengths.
+		It results in a finite contact force at the end of the cycle even though the positions and orientations are unchanged, in total contradiction with the elastic nature of the problem. It could also be seen as an *inconsistent energy creation or loss*. Given that DEM simulations tend to generate oscillations around equilibrium (damped mass-spring), it can have a significant impact on the evolution of the packings, resulting for instance in slow creep in iterations under constant load.
+		The solution adopted here to avoid ratcheting is as proposed by McNamara and co-workers.
+		They analyzed the ratcheting problem in detail - even though they comment on the basis of a cycle that differs from the one shown above. One will find interesting discussions in e.g. DOI 10.1103/PhysRevE.77.031304, even though solution it suggests is not fully applied here (equations of motion are not incorporating alpha, in contradiction with what is suggested by McNamara et al.).
+		 */
+		// For sphere-facet contact this will give an erroneous value of relative velocity...
 		Real alpha = (radius1+radius2)/(radius1+radius2-penetrationDepth);
-		if (shearScheme & MID_STEP_NORMAL) {
-			Vector3r relativeVelocity = (rbp2->vel+shiftVel-rbp1->vel)*alpha + rbp2->angVel.cross(-radius2*midStepN) - rbp1->angVel.cross(radius1*midStepN);
-			relativeVelocity -= 0.5*relativeVelocity.cross(twist_axis);
-			relativeVelocity -= 0.5*relativeVelocity.cross(orthonormal_axis);
-			return relativeVelocity;
-		} else {
-			return (rbp2->vel+shiftVel-rbp1->vel)*alpha + rbp2->angVel.cross(-radius2*normal) - rbp1->angVel.cross(radius1*normal);
-		}
-	}
-
-	if (shearScheme & EXACT_SHEAR) {
-  		const Vector3r& prevNormal = midStepN;//an alias, for easier reading
-		const Real t1 = dt*rbp1->angVel.norm(); const Real t2 = dt*rbp2->angVel.norm();
-		Real sint1,sint2,cost1,cost2;
-		bool largeRot = ((t1)>1e-12 || (t2)>1e-12);
-		if (largeRot){
-			sint1 = sin(t1); sint2 = sin(t2);
-			cost1 = sqrt(1-sint1*sint1); cost2 = sqrt(1-sint2*sint2);}
-		else {sint1=sint2=0; cost1=cost2=1;}
-		const Real& r1 = radius1; const Real& r2 = radius2;
-		Vector3r v1sint1 = (t1>1e-15)? dt*(sint1/t1)*rbp1->angVel: dt*rbp1->angVel;
-		Vector3r v2sint2 = (t2>1e-15)? dt*(sint2/t2)*rbp2->angVel: dt*rbp2->angVel;
-
-		Vector3r relativeVelocity = ((r1+r2)*prevNormal+(r1*v1sint1+r2*v2sint2).cross(prevNormal)
-						+ r1/(1.+cost1)*v1sint1.cross(v1sint1.cross(prevNormal))
-						+ r2/(1.+cost2)*v2sint2.cross(v2sint2.cross(prevNormal)))
-						.cross(normal);
-		relativeVelocity = relativeVelocity.cross(normal);
+		Vector3r relativeVelocity = (rbp2->vel-rbp1->vel)*alpha + rbp2->angVel.cross(-radius2*normal) - rbp1->angVel.cross(radius1*normal);
+		relativeVelocity+=alpha*shiftVel;
 		return relativeVelocity;
-	}
-
-	LOG_ERROR("This should not happen, report the bug please");
-	return Vector3r();
+	} else {
+		// It is correct for sphere-sphere and sphere-facet contact
+		Vector3r c1x = (contactPoint - rbp1->pos);
+		Vector3r c2x = (contactPoint - rbp2->pos + shift2);
+		Vector3r relativeVelocity = (rbp2->vel+rbp2->angVel.cross(c2x)) - (rbp1->vel+rbp1->angVel.cross(c1x));
+		relativeVelocity+=shiftVel;
+		return relativeVelocity;}
 }
 
 Vector3r ScGeom::getIncidentVel(const State* rbp1, const State* rbp2, Real dt, bool avoidGranularRatcheting){
@@ -176,6 +71,7 @@ Vector3r ScGeom::getIncidentVel(const State* rbp1, const State* rbp2, Real dt, b
 }
 
 Vector3r ScGeom::getIncidentVel_py(shared_ptr<Interaction> i, bool avoidGranularRatcheting){
+	if(i->geom.get()!=this) throw invalid_argument("ScGeom object is not the same as Interaction.geom.");
 	Scene* scene=Omega::instance().getScene().get();
 	return getIncidentVel(Body::byId(i->getId1(),scene)->state.get(),Body::byId(i->getId2(),scene)->state.get(),
 		scene->dt,
@@ -190,6 +86,7 @@ Vector3r ScGeom::getRelAngVel(const State* rbp1, const State* rbp2, Real dt){
 }
 
 Vector3r ScGeom::getRelAngVel_py(shared_ptr<Interaction> i){
+	if(i->geom.get()!=this) throw invalid_argument("ScGeom object is not the same as Interaction.geom.");
 	Scene* scene=Omega::instance().getScene().get();
 	return getRelAngVel(Body::byId(i->getId1(),scene)->state.get(),Body::byId(i->getId2(),scene)->state.get(),scene->dt);
 }
